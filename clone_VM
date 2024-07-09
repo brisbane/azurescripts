@@ -1,0 +1,145 @@
+#!/bin/bash
+#Provide the subscription Id
+subscriptionId=""
+VMName=""
+resourceGroupName=""
+usage()
+{
+  echo "-s <subscriptionid> -v <vmname> -g <resourcegroup> [ -d destinationrg ] [ -c vm_clone_new_name ]"
+  echo "get names from" 
+  echo "    az vm list --output json | jq '.[].name'"
+}
+while getopts "hs:v:g:c:" arg; do
+  case $arg in
+    h)
+      echo "usage" 
+      usage
+      ;;
+    s)
+      subscriptionId=$OPTARG
+      ;;
+
+    v)
+      VMName=$OPTARG
+      ;;
+
+    g)
+      resourceGroupName=$OPTARG
+      ;;
+    d)
+      destResourceGroupName=$OPTARG
+      ;;
+    c) 
+      VMNameNew=$OPTARG
+      ;;
+
+  esac
+done
+
+if [ -z "$subscriptionId" ]   || [ -z "$VMName" ] || [ -z "$resourceGroupName" ] 
+  then
+	  usage
+  exit 1
+fi
+if [ -z "$destResourceGroupName" ] 
+then
+  destResourceGroupName=$resourceGroupName
+  echo "WARNING, creating VM in same resourcegroup, ctrl+c exit"
+  read
+fi
+if [ -z "$VMNameNew" ] 
+then
+  VMNameNew="${VMName}-new"
+  echo "WARNING, creating VM with name $VMNameNew, ctrl+c exit"
+  read
+fi
+
+LOCATION="$(az vm show --name ${VMName}  -g ${resourceGroupName} | jq  -r '.location')"
+az group show -g $destResourceGroupName > /dev/null 2>&1
+if  [ $? -ne 0 ]
+then
+	echo "Dstination resourgce group does not exist, create in region with"
+        echo az group create --name "${destResourceGroupName}" --location "${LOCATION}"
+fi
+
+clone_disk()
+{
+    diskID="$1"
+    SUFFIX="$2"
+    resourceGroupName="$3"
+    destResourceGroupName="$4"
+
+    sourceDiskName="$(echo $diskID | sed 's|.*/||')"
+    snapshotName="${sourceDiskName}-snap-$SUFFIX"
+    diskName="${sourceDiskName}-$SUFFIX"
+  
+    echo az snapshot create \
+      -g "${resourceGroupName}" \
+  	--source "$diskID" \
+  	--name "$snapshotName"
+    az snapshot create \
+      -g "${resourceGroupName}" \
+  	--source "$diskID" \
+  	--name "$snapshotName"
+    
+    snapshotID=$(az snapshot show --name "$snapshotName" -g "${resourceGroupName}"  | jq -r '.id')
+    echo $snapshotID
+    #Provide the size of the disks in GB. It should be greater than the VHD file size.  
+    diskSize=$(az disk show --ids $diskID | jq -r '.diskSizeGB')
+    diskSkuName=$(az disk show --ids $diskID | jq -r '.sku.name')
+    #diskSkuTier=$(az disk show --ids $diskID | jq '.sku.tier')
+    #Provide the URI of the VHD file that will be used to create Managed Disk. 
+  
+  
+  
+
+  
+    #If you're creating an OS disk, uncomment the following lines and replace the values
+
+  
+    echo az disk create --resource-group $destResourceGroupName --name $diskName --sku $diskSkuName --size-gb $diskSize --source $snapshotID
+    az disk create --resource-group $destResourceGroupName --name $diskName --sku $diskSkuName --size-gb $diskSize --source $snapshotID
+    NEWDISKNAME=$diskName
+    SNAPSHOTS="$SNAPSHOTS $snapshotID"
+}
+
+attach_disk()
+{
+   diskName=$1
+   VM=$2
+   resourceGroup=$3
+   diskId=$(az disk show -g $resourceGroup -n "$diskName" --query 'id' -o tsv)
+   az vm disk attach -g $resourceGroup --vm-name "$VM" --name $diskId
+}
+
+#Provide the name of your resource group.
+#Ensure that resource group is already created 
+
+#Set the context to the subscription Id where Managed Disk will be created
+az account set --subscription "$subscriptionId"
+NOW="$(date +%Y%m%d-%H%M)"
+
+
+OSDISK="$(az vm show --name  ${VMName}  -g ${resourceGroupName} | jq -r  '.storageProfile.osDisk.managedDisk.id')"
+
+NEWDISKNAME=""
+clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"
+echo $NEWDISKNAME
+
+osType='Linux' #Acceptable values are either Windows or Linux
+hyperVGeneration='v2' #Acceptable values are either v1 or v2
+az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType
+
+DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
+for diskID in $DISKS; do 
+        NEWDISKNAME=""
+	clone_disk "$diskID" "$NOW" "$resourceGroupName" "$destResourceGroupName"
+	attach_disk "$NEWDISKNAME"  "${VMName}" "$destResourceGroupName"
+done
+
+
+sleep 10
+echo az snapshot delete --ids "$SNAPSHOTS"  #-g "$destResourceGroupName"
+az snapshot delete --ids "$SNAPSHOTS" #-g "$destResourceGroupName"
+
+
