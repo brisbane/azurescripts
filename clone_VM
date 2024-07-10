@@ -164,6 +164,18 @@ size=$(az vm show -n "${VMName}"  -g "${resourceGroupName}" --query "[hardwarePr
 INTFID=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
 IPFORWARD=$(az network nic show --id "$INTFID" --query enableIPForwarding)
 PUBIP=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "ipConfigurations.publicIPAddress" -otsv)
+IPALLOC=$(az network nic show -n $INTFID -g "${resourceGroupName}" --query ipConfigurations[0].privateIPAllocationMethod -otsv | tr '[:upper:]' '[:lower]')
+if [ static == $IPALLOC ]
+then
+    IPADDR=$(az network nic show -n $INTFID -g "${resourceGroupName}" --query ipConfigurations[0].privateIPAddress -otsv)
+    IPSETTINGS="--private-ip-address=$IPADDR"
+fi
+
+
+
+
+
+#TODO - this needs to actualy work
 if [ -z "PUBIP" ]; then
 	PUBLICIP="--public-ip-address ''"
 fi
@@ -176,7 +188,7 @@ NEWDISKNAME=""
 clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"
 echo $NEWDISKNAME
 echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET --nsg "$NEWNSG"
-az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET --nsg "$NEWNSG"
+az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET --nsg "$NEWNSG" 
 #subnet and ipforward
 
 DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
@@ -187,7 +199,12 @@ for diskID in $DISKS; do
 done
 
 NEWINTFID=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
-az network nic update --id "$NEWINTFID" --ip-forwarding "$IPFORWARD"
+NEWINTFNAME=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].name" -otsv)
+az network nic update --id "$NEWINTFID" --ip-forwarding "$IPFORWARD" 
+#TODO this ipconfig name is guessed from the defaults applied by azure, its probably fine.
+az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address="$IPADDR" -g "${destResourceGroupName}" --name ipconfig"${VMNameNew}"
+
+$IPSETTINGS
 
 sleep 10
 #one at  time
