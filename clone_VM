@@ -5,11 +5,11 @@ VMName=""
 resourceGroupName=""
 usage()
 {
-  echo "-s <subscriptionid> -v <vmname> -g <resourcegroup> [ -d destinationrg ] [ -c vm_clone_new_name ]"
+  echo "-s <subscriptionid> -n <vmname> -g <resourcegroup> [ -d destinationrg ] [ -c vm_clone_new_name ] [ -t  tags ] [ -v VNET ] [ -l SUBNET (lan) ]"
   echo "get names from" 
   echo "    az vm list --output json | jq '.[].name'"
 }
-while getopts "hs:v:g:c:" arg; do
+while getopts "hs:n:g:c:d:v:t:l:" arg; do
   case $arg in
     h)
       echo "usage" 
@@ -19,7 +19,7 @@ while getopts "hs:v:g:c:" arg; do
       subscriptionId=$OPTARG
       ;;
 
-    v)
+    n)
       VMName=$OPTARG
       ;;
 
@@ -32,6 +32,15 @@ while getopts "hs:v:g:c:" arg; do
     c) 
       VMNameNew=$OPTARG
       ;;
+    t)
+      TAGS="--tags $OPTARG"
+      ;;
+    l)
+      SUBNET="--subnet $OPTARG"
+      ;;
+    v) 
+      VNET="--vnet-name $OPTARG"
+      ;;
 
   esac
 done
@@ -41,10 +50,12 @@ if [ -z "$subscriptionId" ]   || [ -z "$VMName" ] || [ -z "$resourceGroupName" ]
 	  usage
   exit 1
 fi
+echo "$destResourceGroupName"
+
 if [ -z "$destResourceGroupName" ] 
 then
   destResourceGroupName=$resourceGroupName
-  echo "WARNING, creating VM in same resourcegroup, ctrl+c exit"
+  echo "WARNING, creating VM in same resourcegroup, ctrl+c exit  $destResourceGroupName"
   read
 fi
 if [ -z "$VMNameNew" ] 
@@ -111,7 +122,29 @@ attach_disk()
    diskId=$(az disk show -g $resourceGroup -n "$diskName" --query 'id' -o tsv)
    az vm disk attach -g $resourceGroup --vm-name "$VM" --name $diskId
 }
+nsg()
+{
+ 
+   SOURCENICID=$1
+   SOURCERG=$2
+   NEWNAME=$3
+   NEWRG=$4
+   SOURCENSGID=$(az network nic show --id "$INTFID" --query networkSecurityGroup.id -otsv)
+   
+   echo az group export -g $SOURCERG  --resource-ids $SOURCENSGID
+   az group export -g $SOURCERG  --resource-ids $SOURCENSGID > /tmp/nsgtemplate.json
+   lenparam=$(cat /tmp/nsgtemplate.json | jq '.parameters | keys | length')
+   if [ -z "$lenparam" ] || [ "$lenparam" -ne 1 ]
+   then
+	   echo something unexpected occured in /tmp/nsgtemplate.json
+	   exit 1
+   fi
+   paramname=$(cat /tmp/nsgtemplate.json | jq -r '.parameters | keys[0]')
+   echo az deployment group create --resource-group $NEWRG  --template-file /tmp/nsgtemplate.json  --parameters "$paramname"="$NEWNAME"
+   az deployment group create --resource-group $NEWRG  --template-file /tmp/nsgtemplate.json  --parameters "$paramname"="$NEWNAME"
+   /bin/rm /tmp/nsgtemplate.json
 
+}
 #Provide the name of your resource group.
 #Ensure that resource group is already created 
 
@@ -122,24 +155,48 @@ NOW="$(date +%Y%m%d-%H%M)"
 
 OSDISK="$(az vm show --name  ${VMName}  -g ${resourceGroupName} | jq -r  '.storageProfile.osDisk.managedDisk.id')"
 
-NEWDISKNAME=""
-clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"
-echo $NEWDISKNAME
+
 
 osType='Linux' #Acceptable values are either Windows or Linux
 hyperVGeneration='v2' #Acceptable values are either v1 or v2
-az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType
+#other settings
+size=$(az vm show -n "${VMName}"  -g "${resourceGroupName}" --query "[hardwareProfile.vmSize]" -otsv)
+INTFID=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
+IPFORWARD=$(az network nic show --id "$INTFID" --query enableIPForwarding)
+PUBIP=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "ipConfigurations.publicIPAddress" -otsv)
+if [ -z "PUBIP" ]; then
+	PUBLICIP="--public-ip-address ''"
+fi
+NEWNSG="${VMNameNew}_nsg"
+
+
+nsg $INTFID $resourceGroupName "$NEWNSG" "$destResourceGroupName"
+
+NEWDISKNAME=""
+clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"
+echo $NEWDISKNAME
+echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET --nsg "$NEWNSG"
+az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET --nsg "$NEWNSG"
+#subnet and ipforward
 
 DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
 for diskID in $DISKS; do 
         NEWDISKNAME=""
 	clone_disk "$diskID" "$NOW" "$resourceGroupName" "$destResourceGroupName"
-	attach_disk "$NEWDISKNAME"  "${VMName}" "$destResourceGroupName"
+	attach_disk "$NEWDISKNAME"  "${VMNameNew}" "$destResourceGroupName"
 done
 
+NEWINTFID=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
+az network nic update --id "$NEWINTFID" --ip-forwarding "$IPFORWARD"
 
 sleep 10
-echo az snapshot delete --ids "$SNAPSHOTS"  #-g "$destResourceGroupName"
-az snapshot delete --ids "$SNAPSHOTS" #-g "$destResourceGroupName"
+#one at  time
+#https://github.com/Azure/azure-cli/issues/19597
+for SNAPSHOT in $SNAPSHOTS 
+do
+  echo az snapshot delete --ids "$SNAPSHOT"  #-g "$destResourceGroupName"
+  az snapshot delete --ids "$SNAPSHOT" #-g "$destResourceGroupName"
+done
+
 
 
