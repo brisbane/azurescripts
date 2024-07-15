@@ -1,0 +1,94 @@
+#!/bin/bash
+export RANDOM_ID="$(openssl rand -hex 3)"
+export MY_RESOURCE_GROUP_NAME="myVMResourceGroup$RANDOM_ID"
+export REGION=EastUS
+export MY_VM_NAME=""
+export MY_USERNAME=azureuser
+export MY_VM_IMAGE="Canonical:0001-com-ubuntu-minimal-jammy:minimal-22_04-lts-gen2:latest"
+export MY_VM_IMAGE="almalinux:almalinux-x86_64:9-gen2:9.4.2024050902"
+SIZE=Standard_B1s
+#!/bin/bash
+#Provide the subscription Id
+subscriptionId=""
+VMName=""
+resourceGroupName=""
+usage()
+{
+	echo "-s <subscriptionid> -n <vmname> -g <resourcegroup> -i <image> -S <size> [ -t  tags ] [ -v VNET ] [ -l SUBNET (lan) ] [ -p (no pubic ip) ] [ -k ssh_key_local_path.pub ]"
+  echo "get keys from"
+  echo "    az sshkey list --query "[].name" -otsv'"
+  echo get images from
+  echo "    az vm image list -p almalinux --all --query \"[].urn\"" 
+  echo get skus from
+  echo "    az vm list-skus --query '[].name'" 
+}
+while getopts "hs:n:g:v:t:l:pk:S:" arg; do
+  case $arg in
+    h)
+      echo "usage"
+      usage
+      ;;
+    s)
+      subscriptionId=$OPTARG
+      ;;
+    g)
+      destResourceGroupName=$OPTARG
+      ;;
+    n)
+      VMNameNew=$OPTARG
+      ;;
+    t)
+      TAGS="--tags $OPTARG"
+      ;;
+    p) 
+      PUBLICIP="--public-ip-address=''"
+      ;;
+    i)
+      MY_VM_IMAGE="$OPTARG"
+      ;;
+    l)
+      SUBNET="--subnet $OPTARG"
+      ;;
+    v)
+      VNET="--vnet-name $OPTARG"
+      ;;
+    S)
+      SIZE=$OPTARG 
+      ;;	    
+    k)
+      SSH_KEY=$OPTARG
+
+  esac
+done
+
+
+if [ -z "$VMNameNew" ] || [ -z "$destResourceGroupName" ]
+  then
+          usage
+  exit 1
+fi
+if [ -n "$subscriptionId" ]; 
+then
+   az account set --name "$subscriptionId"
+fi
+
+REGION=$(az group show -g "$destResourceGroupName" --query location -otsv)
+if [ $? -ne 0 ]; then
+   echo "Cant determine region of resource group $destResourceGroupName"
+   usage
+   exit 1
+fi
+if [ -z "$PUBLICIP" ]; then
+   PUBLICIP="--public-ip-sku Standard"
+fi
+
+echo "az vm create --name ${VMNameNew} --resource-group $destResourceGroupName \
+	--size $SIZE $PUBLICIP $TAGS $VNET $SUBNET --ssh-key-value $SSH_KEY \
+    --image $MY_VM_IMAGE  --admin-username $MY_USERNAME     --assign-identity" 
+az vm create --name ${VMNameNew} --resource-group $destResourceGroupName \
+	--size $SIZE $PUBLICIP $TAGS $VNET $SUBNET --ssh-key-value $SSH_KEY \
+    --image $MY_VM_IMAGE  --admin-username $MY_USERNAME     --assign-identity
+
+#--os-type $osType \
+#--nsg "$NEWNSG"
+

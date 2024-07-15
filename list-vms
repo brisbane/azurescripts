@@ -1,0 +1,14 @@
+#!/bin/bash
+for id in $( az vm list --query "[].id"  -otsv);
+do
+	name=$(az vm show --id "$id" --query name)
+#echo az vm show --id $id --query networkProfile.networkInterfaces[0].id -otsv
+ID=$(az vm show --id $id --query networkProfile.networkInterfaces[0].id -otsv)
+#echo az network nic show --id "$ID" --query ipConfigurations[0].publicIPAddress -otsv
+PIPID=$(az network nic show --id "$ID" --query ipConfigurations[0].publicIPAddress.id -otsv)
+
+IP==$(az network public-ip show --id "$PIPID" --query ipAddress)
+echo ${name}: $IP
+
+done
+ 
