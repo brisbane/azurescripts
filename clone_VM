@@ -50,6 +50,7 @@ if [ -z "$subscriptionId" ]   || [ -z "$VMName" ] || [ -z "$resourceGroupName" ]
 	  usage
   exit 1
 fi
+az account set --name "$subscriptionId"
 echo "$destResourceGroupName"
 
 if [ -z "$destResourceGroupName" ] 
@@ -199,9 +200,11 @@ for diskID in $DISKS; do
 done
 
 NEWINTFID=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
-NEWINTFNAME=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].name" -otsv)
+NEWINTFNAME=$(az network nic show --id ${NEWINTFID}  --query name -otsv)
+echo "az network nic update --id $NEWINTFID --ip-forwarding $IPFORWARD" 
 az network nic update --id "$NEWINTFID" --ip-forwarding "$IPFORWARD" 
 #TODO this ipconfig name is guessed from the defaults applied by azure, its probably fine.
+echo "az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address=$IPADDR -g ${destResourceGroupName} --name ipconfig${VMNameNew}"
 az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address="$IPADDR" -g "${destResourceGroupName}" --name ipconfig"${VMNameNew}"
 
 $IPSETTINGS
