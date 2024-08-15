@@ -6,6 +6,7 @@ resourceGroupName=""
 usage()
 {
   echo "-s <subscriptionid> -n <vmname> -g <resourcegroup> [ -d destinationrg ] [ -c vm_clone_new_name ] [ -t  tags ] [ -v VNET ] [ -l SUBNET (lan) ]"
+  echo "Recommend specifying subnet ID and no vnet to ensure commands work for vms in different RG to network"
   echo "get names from" 
   echo "    az vm list --output json | jq '.[].name'"
 }

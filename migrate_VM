@@ -1,0 +1,172 @@
+#!/bin/bash 
+#Provide the subscription Id
+subscriptionId=""
+VMName=""
+resourceGroupName=""
+usage()
+{
+  echo "-s <subscriptionid> -n <vmname> -g <resourcegroup> [ -d destinationrg ] [ -c vm_clone_new_name ] [ -t  tags ] [ -N FULLY QUALIFIED ID OF SUBNET ] [ -v VNET ] [ -l SUBNET (lan) ]"
+  echo "Recommend specifying subnet ID and no vnet to ensure commands work for vms in different RG to network"
+  echo "get names from" 
+  echo "    az vm list --output json | jq '.[].name'"
+}
+while getopts "hs:n:g:c:d:v:t:l:" arg; do
+  case $arg in
+    h)
+      echo "usage" 
+      usage
+      ;;
+    s)
+      subscriptionId=$OPTARG
+      ;;
+
+    n)
+      VMName=$OPTARG
+      ;;
+
+    g)
+      resourceGroupName=$OPTARG
+      ;;
+    d)
+      destResourceGroupName=$OPTARG
+      ;;
+    c) 
+      VMNameNew=$OPTARG
+      ;;
+    t)
+      TAGS="--tags $OPTARG"
+      ;;
+    l)
+      SUBNET="--subnet $OPTARG"
+      ;;
+    v) 
+      VNET="--vnet-name $OPTARG"
+      ;;
+
+  esac
+done
+
+if [ -z "$subscriptionId" ]   || [ -z "$VMName" ] || [ -z "$resourceGroupName" ] 
+  then
+	  usage
+  exit 1
+fi
+az account set --name "$subscriptionId"
+echo "$destResourceGroupName"
+
+if [ -z "$destResourceGroupName" ] 
+then
+  destResourceGroupName=$resourceGroupName
+  echo "WARNING, creating VM in same resourcegroup, ctrl+c exit  $destResourceGroupName"
+  read
+fi
+if [ -z "$VMNameNew" ] 
+then
+  VMNameNew="${VMName}-new"
+  echo "WARNING, creating VM with name $VMNameNew, ctrl+c exit"
+  read
+fi
+
+#LOCATION="$(az vm show --name ${VMName}  -g ${resourceGroupName} | jq  -r '.location')"
+LOCATION=northeurope
+az group show -g $destResourceGroupName > /dev/null 2>&1
+if  [ $? -ne 0 ]
+then
+	echo "Dstination resourgce group does not exist, create in region with"
+        echo az group create --name "${destResourceGroupName}" --location "${LOCATION}"
+fi
+
+attach_disk_by_id()
+{
+   diskID=$1
+   VM="$2"
+   resourceGroup=$3
+   
+   az vm disk attach -g $resourceGroup --vm-name "$VM" --name $diskId
+}
+nsg()
+{
+ 
+   SOURCENICID=$1
+   SOURCERG=$2
+   NEWNAME=$3
+   NEWRG=$4
+   SOURCENSGID=$(az network nic show --id "$INTFID" --query networkSecurityGroup.id -otsv)
+   
+}
+#Provide the name of your resource group.
+#Ensure that resource group is already created 
+
+#Set the context to the subscription Id where Managed Disk will be created
+az account set --subscription "$subscriptionId"
+NOW="$(date +%Y%m%d-%H%M)"
+
+
+#OSDISK="$(az vm show --name  ${VMName}  -g ${resourceGroupName} | jq -r  '.storageProfile.osDisk.managedDisk.id')"
+OSDISK="/subscriptions/3a200633-917b-42e2-a2ee-9a3e114e0d07/resourceGroups/SLX-PROD-VPN/providers/Microsoft.Compute/disks/vpn03_OsDisk_1_b7f23ea459bd4583b95187f119d6e542"
+OSDISKNAME="$(az disk show --id $OSDISK  --query name -otsv)"
+
+osType='Linux' #Acceptable values are either Windows or Linux
+hyperVGeneration='v2' #Acceptable values are either v1 or v2
+#other settings
+#size=$(az vm show -n "${VMName}"  -g "${resourceGroupName}" --query "[hardwareProfile.vmSize]" -otsv)
+size=Standard_B1ms
+#INTFID=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
+INTFID="/subscriptions/3a200633-917b-42e2-a2ee-9a3e114e0d07/resourceGroups/SLX-Prod-VPN/providers/Microsoft.Network/networkInterfaces/vpn0191"
+IPFORWARD=$(az network nic show --id "$INTFID" --query enableIPForwarding)
+
+
+#PUBIP=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "ipConfigurations.publicIPAddress" -otsv)
+IPALLOC=$(az network nic show --id $INTFID --query ipConfigurations[0].privateIPAllocationMethod -otsv | tr '[:upper:]' '[:lower]')
+if [ static == $IPALLOC ]
+then
+    IPADDR=$(az network nic show -n $INTFID -g "${resourceGroupName}" --query ipConfigurations[0].privateIPAddress -otsv)
+    IPSETTINGS="--private-ip-address=$IPADDR"
+fi
+
+
+
+
+
+#TODO - this needs to actualy work
+if [ -z "PUBIP" ]; then
+	PUBLICIP="--public-ip-address ''"
+fi
+
+NSGSID=$(az network nic show --id "$INTFID" --query networkSecurityGroup.id -otsv)
+NSGNAME="$(az network nsg show --id "$NSGID" --query name -otsv)"
+if [ -n "$NSGNAME" ]; then
+  NSG="--nsg $NSGNAME"
+fi
+
+
+echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $OSDISKNAME --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSG
+#subnet and ipforward
+exit 0 
+DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
+for diskID in $DISKS; do 
+        NEWDISKNAME=""
+	attach_disk "$diskID"  "${VMNameNew}" "$destResourceGroupName"
+done
+
+NEWINTFID=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
+NEWINTFNAME=$(az network nic show --id ${NEWINTFID}  --query name -otsv)
+echo "az network nic update --id $NEWINTFID --ip-forwarding $IPFORWARD" 
+az network nic update --id "$NEWINTFID" --ip-forwarding "$IPFORWARD" 
+#TODO this ipconfig name is guessed from the defaults applied by azure, its probably fine.
+echo "az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address=$IPADDR -g ${destResourceGroupName} --name ipconfig${VMNameNew}"
+az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address="$IPADDR" -g "${destResourceGroupName}" --name ipconfig"${VMNameNew}"
+
+$IPSETTINGS
+
+sleep 10
+#one at  time
+#https://github.com/Azure/azure-cli/issues/19597
+for SNAPSHOT in $SNAPSHOTS 
+do
+  echo az snapshot delete --ids "$SNAPSHOT"  #-g "$destResourceGroupName"
+  az snapshot delete --ids "$SNAPSHOT" #-g "$destResourceGroupName"
+done
+
+
+
