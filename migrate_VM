@@ -1,4 +1,5 @@
 #!/bin/bash 
+#Script to migrate VM to a new network
 #Provide the subscription Id
 subscriptionId=""
 VMName=""
@@ -67,8 +68,9 @@ then
   read
 fi
 
-#LOCATION="$(az vm show --name ${VMName}  -g ${resourceGroupName} | jq  -r '.location')"
-LOCATION=northeurope
+LOCATION="$(az vm show --name ${VMName}  -g ${resourceGroupName} | jq  -r '.location')"
+
+#LOCATION=northeurope
 az group show -g $destResourceGroupName > /dev/null 2>&1
 if  [ $? -ne 0 ]
 then
@@ -82,7 +84,7 @@ attach_disk_by_id()
    VM="$2"
    resourceGroup=$3
    
-   az vm disk attach -g $resourceGroup --vm-name "$VM" --name $diskId
+   echo az vm disk attach -g $resourceGroup --vm-name "$VM" --name $diskId >> /tmp/commands.$$
 }
 nsg()
 {
@@ -109,8 +111,8 @@ OSDISKNAME="$(az disk show --id $OSDISK  --query name -otsv)"
 osType='Linux' #Acceptable values are either Windows or Linux
 hyperVGeneration='v2' #Acceptable values are either v1 or v2
 #other settings
-#size=$(az vm show -n "${VMName}"  -g "${resourceGroupName}" --query "[hardwareProfile.vmSize]" -otsv)
-size=Standard_B1ms
+size=$(az vm show -n "${VMName}"  -g "${resourceGroupName}" --query "[hardwareProfile.vmSize]" -otsv)
+#size=Standard_B1ms
 #INTFID=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
 INTFID="/subscriptions/3a200633-917b-42e2-a2ee-9a3e114e0d07/resourceGroups/SLX-Prod-VPN/providers/Microsoft.Network/networkInterfaces/vpn0191"
 IPFORWARD=$(az network nic show --id "$INTFID" --query enableIPForwarding)
@@ -141,32 +143,29 @@ fi
 
 
 echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $OSDISKNAME --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSG
+echo "az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $OSDISKNAME --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSG" >> /tmp/commands.$$
 #subnet and ipforward
-exit 0 
+
 DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
 for diskID in $DISKS; do 
         NEWDISKNAME=""
 	attach_disk "$diskID"  "${VMNameNew}" "$destResourceGroupName"
 done
 
-NEWINTFID=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
-NEWINTFNAME=$(az network nic show --id ${NEWINTFID}  --query name -otsv)
-echo "az network nic update --id $NEWINTFID --ip-forwarding $IPFORWARD" 
-az network nic update --id "$NEWINTFID" --ip-forwarding "$IPFORWARD" 
+
+cat /tmp/commands.$$
+echo "Is the above likely to work? OK to Delete the VM that we are using as a template (ctrl+c to exit)"
+read
+az vm delete --name ${VMName}  -g ${resourceGroupName} 
+bash /tmp/commands.$$
+
+#NEWINTFID=$(az vm show -n "${VMNameNew}"  -g "${destResourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
+#NEWINTFNAME=$(az network nic show --id ${NEWINTFID}  --query name -otsv)
+#echo "az network nic update --id $NEWINTFID --ip-forwarding $IPFORWARD" 
+#az network nic update --id "$NEWINTFID" --ip-forwarding "$IPFORWARD" 
 #TODO this ipconfig name is guessed from the defaults applied by azure, its probably fine.
-echo "az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address=$IPADDR -g ${destResourceGroupName} --name ipconfig${VMNameNew}"
-az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address="$IPADDR" -g "${destResourceGroupName}" --name ipconfig"${VMNameNew}"
+#echo "az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address=$IPADDR -g ${destResourceGroupName} --name ipconfig${VMNameNew}"
+#az network nic ip-config update --nic-name $NEWINTFNAME  --private-ip-address="$IPADDR" -g "${destResourceGroupName}" --name ipconfig"${VMNameNew}"
 
 $IPSETTINGS
-
-sleep 10
-#one at  time
-#https://github.com/Azure/azure-cli/issues/19597
-for SNAPSHOT in $SNAPSHOTS 
-do
-  echo az snapshot delete --ids "$SNAPSHOT"  #-g "$destResourceGroupName"
-  az snapshot delete --ids "$SNAPSHOT" #-g "$destResourceGroupName"
-done
-
-
 
