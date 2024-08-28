@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -xe
 #Provide the subscription Id
 subscriptionId=""
 VMName=""
@@ -132,7 +132,10 @@ nsg()
    NEWNAME=$3
    NEWRG=$4
    SOURCENSGID=$(az network nic show --id "$INTFID" --query networkSecurityGroup.id -otsv)
-   
+   if [ -z "$SOURCENSGID" ]; then
+      echo "WARNING no NSG attached directly to interface, if the clone is in a new subnet, check that subnet network rles match the source subnet"
+      return 1
+   fi
    echo az group export -g $SOURCERG  --resource-ids $SOURCENSGID
    az group export -g $SOURCERG  --resource-ids $SOURCENSGID > /tmp/nsgtemplate.json
    lenparam=$(cat /tmp/nsgtemplate.json | jq '.parameters | keys | length')
@@ -166,7 +169,8 @@ size=$(az vm show -n "${VMName}"  -g "${resourceGroupName}" --query "[hardwarePr
 INTFID=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "networkProfile.networkInterfaces[0].id" -otsv)
 IPFORWARD=$(az network nic show --id "$INTFID" --query enableIPForwarding)
 PUBIP=$(az vm show -n "${VMName}"  -g "${resourceGroupName}"  --query "ipConfigurations.publicIPAddress" -otsv)
-IPALLOC=$(az network nic show -n $INTFID -g "${resourceGroupName}" --query ipConfigurations[0].privateIPAllocationMethod -otsv | tr '[:upper:]' '[:lower]')
+IPALLOC=$(az network nic show --ids $INTFID --query ipConfigurations[0].privateIPAllocationMethod -otsv | tr '[:upper:]' '[:lower:]')
+echo $IPALLOC
 if [ static == $IPALLOC ]
 then
     IPADDR=$(az network nic show -n $INTFID -g "${resourceGroupName}" --query ipConfigurations[0].privateIPAddress -otsv)
@@ -176,21 +180,23 @@ fi
 
 
 
-
 #TODO - this needs to actualy work
-if [ -z "PUBIP" ]; then
+if [ -z "$PUBIP" ]; then
+   PUBIP=$(az vm list-ip-addresses -n "${VMName}"  -g "${resourceGroupName}"   --query [].virtualMachine.network.publicIpAddresses[].ipAddress -otsv)
+   if [ -z "$PUBIP" ]; then
 	PUBLICIP="--public-ip-address ''"
+   fi
 fi
 NEWNSG="${VMNameNew}_nsg"
+NSGPARAM="--nsg $NEWNSG"
 
-
-nsg $INTFID $resourceGroupName "$NEWNSG" "$destResourceGroupName"
+nsg $INTFID $resourceGroupName "$NEWNSG" "$destResourceGroupName" || NSGPARARAM=""
 
 NEWDISKNAME=""
 clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"
 echo $NEWDISKNAME
-echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET --nsg "$NEWNSG"
-az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET --nsg "$NEWNSG" 
+echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM
+az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM 
 #subnet and ipforward
 
 DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
