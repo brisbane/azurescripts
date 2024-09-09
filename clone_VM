@@ -193,7 +193,7 @@ fi
 if [ -z "$PUBIP" ]; then
    PUBIP=$(az vm list-ip-addresses -n "${VMName}"  -g "${resourceGroupName}"   --query [].virtualMachine.network.publicIpAddresses[].ipAddress -otsv)
    if [ -z "$PUBIP" ]; then
-	PUBLICIP='--public-ip-address ""'
+	PUBLICIP="NO"
    fi
 fi
 NEWNSG="${VMNameNew}_nsg"
@@ -204,8 +204,13 @@ nsg $INTFID $resourceGroupName "$NEWNSG" "$destResourceGroupName" || NSGPARARAM=
 NEWDISKNAME=""
 clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"  ${VMNameNew}
 echo $NEWDISKNAME
-echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISNAME --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM
-az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISKNAME --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM 
+if [ "$PUBLICIP" == NO  ] ;then
+  echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISNAME --os-type $osType --size $size --public-ip-address "" $TAGS $VNET $SUBNET $NSGPARAM
+  az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISKNAME --os-type $osType --size $size --public-ip-address "" $TAGS $VNET $SUBNET $NSGPARAM 
+else
+  echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISNAME --os-type $osType --size $size $TAGS $VNET $SUBNET $NSGPARAM
+  az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISKNAME --os-type $osType --size $size  $TAGS $VNET $SUBNET $NSGPARAM 
+fi
 #subnet and ipforward
 
 DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
