@@ -81,11 +81,20 @@ clone_disk()
     SUFFIX="$2"
     resourceGroupName="$3"
     destResourceGroupName="$4"
+    newname=$5
+
 
     sourceDiskName="$(echo $diskID | sed 's|.*/||')"
+    if [ -n "$newname" ]; then
+	    destDiskName=$(echo  "$sourceDiskName" | sed "s/.*-\([a-zA-Z0-9]*\)disk/$newname-\1disk/" )
+	    destDiskName="$destDiskName-$SUFFIX"
+    else
+	    destDiskName="$sourceDiskName-$SUFFIX"
+    fi
+
     snapshotName="${sourceDiskName}-snap-$SUFFIX"
-    diskName="${sourceDiskName}-$SUFFIX"
-  
+    
+    echo $destDiskName
     echo az snapshot create \
       -g "${resourceGroupName}" \
   	--source "$diskID" \
@@ -110,9 +119,9 @@ clone_disk()
     #If you're creating an OS disk, uncomment the following lines and replace the values
 
   
-    echo az disk create --resource-group $destResourceGroupName --name $diskName --sku $diskSkuName --size-gb $diskSize --source $snapshotID
-    az disk create --resource-group $destResourceGroupName --name $diskName --sku $diskSkuName --size-gb $diskSize --source $snapshotID
-    NEWDISKNAME=$diskName
+    echo az disk create --resource-group $destResourceGroupName --name $dsestDiskName --sku $diskSkuName --size-gb $diskSize --source $snapshotID
+    az disk create --resource-group $destResourceGroupName --name $destDiskName --sku $diskSkuName --size-gb $diskSize --source $snapshotID
+    export NEWDISKNAME=$destDiskName
     SNAPSHOTS="$SNAPSHOTS $snapshotID"
 }
 
@@ -173,7 +182,7 @@ IPALLOC=$(az network nic show --ids $INTFID --query ipConfigurations[0].privateI
 echo $IPALLOC
 if [ static == $IPALLOC ]
 then
-    IPADDR=$(az network nic show -n $INTFID -g "${resourceGroupName}" --query ipConfigurations[0].privateIPAddress -otsv)
+    IPADDR=$(az network nic show --ids $INTFID -g "${resourceGroupName}" --query ipConfigurations[0].privateIPAddress -otsv)
     IPSETTINGS="--private-ip-address=$IPADDR"
 fi
 
@@ -184,7 +193,7 @@ fi
 if [ -z "$PUBIP" ]; then
    PUBIP=$(az vm list-ip-addresses -n "${VMName}"  -g "${resourceGroupName}"   --query [].virtualMachine.network.publicIpAddresses[].ipAddress -otsv)
    if [ -z "$PUBIP" ]; then
-	PUBLICIP="--public-ip-address ''"
+	PUBLICIP='--public-ip-address ""'
    fi
 fi
 NEWNSG="${VMNameNew}_nsg"
@@ -193,16 +202,16 @@ NSGPARAM="--nsg $NEWNSG"
 nsg $INTFID $resourceGroupName "$NEWNSG" "$destResourceGroupName" || NSGPARARAM=""
 
 NEWDISKNAME=""
-clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"
+clone_disk "$OSDISK" "$NOW" "$resourceGroupName" "$destResourceGroupName"  ${VMNameNew}
 echo $NEWDISKNAME
-echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM
-az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $diskName --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM 
+echo az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISNAME --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM
+az vm create --name ${VMNameNew} --resource-group $destResourceGroupName --attach-os-disk $NEWDISKNAME --os-type $osType --size $size $PUBLICIP $TAGS $VNET $SUBNET $NSGPARAM 
 #subnet and ipforward
 
 DISKS="$(az vm show --name  "${VMName}"  -g ${resourceGroupName} | jq  -r '.storageProfile.dataDisks[].managedDisk.id')" 
 for diskID in $DISKS; do 
         NEWDISKNAME=""
-	clone_disk "$diskID" "$NOW" "$resourceGroupName" "$destResourceGroupName"
+	clone_disk "$diskID" "$NOW" "$resourceGroupName" "$destResourceGroupName" ${VMNameNew}
 	attach_disk "$NEWDISKNAME"  "${VMNameNew}" "$destResourceGroupName"
 done
 
